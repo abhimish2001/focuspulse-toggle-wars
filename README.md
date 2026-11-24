@@ -92,4 +92,22 @@ This script:
 - Models conversion behavior with real-world statistical variation.
 - Flushes all buffered events via `await flagsmith.close()`.
 
-Refresh the experiment results in the Flagsmith Dashboard to see the Bayesian statistical significance.
+---
+
+## 📊 6. Live Experiment Results & Dashboard
+
+- **Project ID:** `55855`
+- **Environment Key:** `esMZQYfcANsHcmozTaXb6F`
+- **Feature Flag ID:** `302755` (`onboarding_flow`)
+- **Experiment ID:** `426` (`Onboarding Flow Experiment`)
+- **Direct Dashboard Link:**  
+  [Flagsmith Experiment Dashboard](https://app.flagsmith.com/project/55855/environment/esMZQYfcANsHcmozTaXb6F/experiments/426)
+
+### Bayesian Statistical Summary:
+| Variation | Exposures (n) | Conversions | Conversion Rate | Lift | Win Probability |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Control** (`control`) | 119 | 38 | 31.9% | Baseline | — |
+| **Guided Tour** (`guided_tour`) | 131 | 74 | 56.5% | **+76.9%** | **99.75%** |
+
+The guided tour variant demonstrated a clear, statistically significant +76.9% lift with a **99.75% chance to win** under Flagsmith's Bayesian analysis engine.
+
