@@ -41,7 +41,7 @@ export function logEvent(data: EventRecord) {
   const metaStr = typeof data.metadata === 'object' ? JSON.stringify(data.metadata) : (data.metadata || null);
 
   const insert = db.prepare(`
-    INSERT INTO events (event_id, user_id, variant, event_name, metadata)
+    INSERT OR IGNORE INTO events (event_id, user_id, variant, event_name, metadata)
     VALUES (?, ?, ?, ?, ?)
   `);
 
@@ -54,21 +54,26 @@ export function logEvent(data: EventRecord) {
   );
 }
 
-export function getExperimentStats() {
+export function getExperimentStats(excludeNoise: boolean = true) {
   const db = getDb();
 
   // Aggregate stats per variant
+  // Bot/Noise filter: Exclude abandoned sessions where elapsed_seconds < 10
   const rows = db.prepare(`
     SELECT 
       variant,
       COUNT(DISTINCT CASE WHEN event_name = 'experiment_exposed' THEN user_id END) as exposed_users,
       COUNT(CASE WHEN event_name = 'session_started' THEN 1 END) as sessions_started,
-      COUNT(CASE WHEN event_name = 'session_abandoned' THEN 1 END) as sessions_abandoned,
+      COUNT(CASE 
+        WHEN event_name = 'session_abandoned' 
+          AND (? = 0 OR metadata NOT LIKE '%"elapsed_seconds":0%' AND metadata NOT LIKE '%"elapsed_seconds":1%' AND metadata NOT LIKE '%"elapsed_seconds":2%' AND metadata NOT LIKE '%"elapsed_seconds":3%' AND metadata NOT LIKE '%"elapsed_seconds":4%' AND metadata NOT LIKE '%"elapsed_seconds":5%' AND metadata NOT LIKE '%"elapsed_seconds":6%' AND metadata NOT LIKE '%"elapsed_seconds":7%' AND metadata NOT LIKE '%"elapsed_seconds":8%' AND metadata NOT LIKE '%"elapsed_seconds":9%')
+        THEN 1 
+      END) as sessions_abandoned,
       COUNT(CASE WHEN event_name = 'session_completed' THEN 1 END) as sessions_completed
     FROM events
     WHERE variant IN ('minimal', 'gamified')
     GROUP BY variant
-  `).all() as any[];
+  `).all(excludeNoise ? 1 : 0) as any[];
 
   const summary = {
     minimal: { exposed_users: 0, sessions_started: 0, sessions_abandoned: 0, sessions_completed: 0, completion_rate: 0 },
@@ -88,7 +93,7 @@ export function getExperimentStats() {
     }
   });
 
-  // Calculate lift
+  // Calculate statistical lift
   let lift = 0;
   if (summary.minimal.completion_rate > 0) {
     lift = Number((((summary.gamified.completion_rate - summary.minimal.completion_rate) / summary.minimal.completion_rate) * 100).toFixed(1));
@@ -107,8 +112,18 @@ export function getExperimentStats() {
   return {
     summary,
     lift,
-    recentEvents
+    recentEvents,
+    noiseFiltered: excludeNoise
   };
+}
+
+export function getAllEventsForExport() {
+  const db = getDb();
+  return db.prepare(`
+    SELECT id, event_id, user_id, variant, event_name, timestamp, metadata
+    FROM events
+    ORDER BY id ASC
+  `).all() as any[];
 }
 
 export function resetDatabase() {

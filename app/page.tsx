@@ -5,7 +5,7 @@ import Link from 'next/link';
 import confetti from 'canvas-confetti';
 import { 
   Play, Pause, RotateCcw, Flame, Trophy, Award, 
-  BarChart3, RefreshCw, Zap, CheckCircle2, AlertCircle 
+  BarChart3, RefreshCw, Zap, CheckCircle2, ShieldCheck 
 } from 'lucide-react';
 import { getOrCreateUserId, resetUserId, initFlagsmithClient, trackFlagsmithConversion, FocusVariant } from '../lib/flagsmith';
 
@@ -16,7 +16,7 @@ export default function FocusPulseApp() {
 
   // Timer State
   const [taskName, setTaskName] = useState<string>('Refactor Flagsmith Experimentation Engine');
-  const [isDemoMode, setIsDemoMode] = useState<boolean>(true); // 60s for demo, 25m for real
+  const [isDemoMode, setIsDemoMode] = useState<boolean>(true); // 60s for demo, 25m for production
   const [totalSeconds, setTotalSeconds] = useState<number>(60);
   const [secondsLeft, setSecondsLeft] = useState<number>(60);
   const [isActive, setIsActive] = useState<boolean>(false);
@@ -28,9 +28,12 @@ export default function FocusPulseApp() {
   const [xpEarned, setXpEarned] = useState<number>(360);
   const [milestoneNudge, setMilestoneNudge] = useState<string | null>(null);
 
+  // Engineering Safeguards: Session UUID & Timer Ref
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const sessionUuidRef = useRef<string>('');
+  const completedSessionsRef = useRef<Set<string>>(new Set());
 
-  // 1. Initialize persistent identity & Flagsmith variant
+  // 1. Initialize persistent identity & Flagsmith variant with Zero-Flicker Loader
   useEffect(() => {
     async function setupExperiment() {
       const id = getOrCreateUserId();
@@ -40,23 +43,28 @@ export default function FocusPulseApp() {
       setVariant(assignedVariant);
       setLoading(false);
 
-      // Log exposure event to local SQLite and Flagsmith
-      await fetch('/api/events', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user_id: id,
-          variant: assignedVariant,
-          event_name: 'experiment_exposed',
-          metadata: { timestamp: new Date().toISOString() }
-        })
-      });
+      // Anti-Spam / Deduplication: Prevent duplicate exposure on React StrictMode or refresh
+      const exposureKey = `fp_exposed_${id}`;
+      if (!sessionStorage.getItem(exposureKey)) {
+        sessionStorage.setItem(exposureKey, 'true');
+        await fetch('/api/events', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            event_id: `exp_${id}_${Date.now()}`,
+            user_id: id,
+            variant: assignedVariant,
+            event_name: 'experiment_exposed',
+            metadata: { is_demo_mode: isDemoMode, timestamp: new Date().toISOString() }
+          })
+        });
+      }
     }
 
     setupExperiment();
   }, []);
 
-  // Set timer duration when toggling Demo Mode
+  // Update duration when toggling Demo Mode
   useEffect(() => {
     const duration = isDemoMode ? 60 : 25 * 60;
     setTotalSeconds(duration);
@@ -78,7 +86,7 @@ export default function FocusPulseApp() {
             if (progress >= 50 && progress < 55 && !milestoneNudge) {
               setMilestoneNudge('🔥 Halfway mark reached! You are in the flow zone.');
             } else if (progress >= 90 && progress < 95) {
-              setMilestoneNudge('⚡ Final stretch! Finish strong to claim +100 XP.');
+              setMilestoneNudge('⚡ Final stretch! Finish strong to claim +120 XP.');
             }
           }
 
@@ -98,8 +106,13 @@ export default function FocusPulseApp() {
     };
   }, [isActive, secondsLeft, totalSeconds, variant, milestoneNudge]);
 
-  // Event 1: Session Started
+  // Event 1: Session Started (Deduplicated with session_uuid)
   const startTimer = async () => {
+    // Generate fresh session_uuid if starting from 0
+    if (!hasStarted) {
+      sessionUuidRef.current = `sess_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    }
+
     setIsActive(true);
     setHasStarted(true);
     setIsCompleted(false);
@@ -109,10 +122,16 @@ export default function FocusPulseApp() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        event_id: `start_${sessionUuidRef.current}`,
         user_id: userId,
         variant,
         event_name: 'session_started',
-        metadata: { taskName, duration_seconds: totalSeconds }
+        metadata: { 
+          taskName, 
+          duration_seconds: totalSeconds,
+          is_demo_mode: isDemoMode,
+          session_uuid: sessionUuidRef.current
+        }
       })
     });
   };
@@ -121,17 +140,25 @@ export default function FocusPulseApp() {
     setIsActive(false);
   };
 
-  // Event 2: Session Abandoned (Reset mid-session)
+  // Event 2: Session Abandoned (Includes elapsed_seconds for bot/noise filtering)
   const resetTimer = async () => {
+    const elapsed = totalSeconds - secondsLeft;
+
     if (isActive || (hasStarted && secondsLeft > 0 && !isCompleted)) {
       await fetch('/api/events', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          event_id: `aban_${sessionUuidRef.current}_${Date.now()}`,
           user_id: userId,
           variant,
           event_name: 'session_abandoned',
-          metadata: { elapsed_seconds: totalSeconds - secondsLeft }
+          metadata: { 
+            elapsed_seconds: elapsed,
+            is_noise: elapsed < 10,
+            is_demo_mode: isDemoMode,
+            session_uuid: sessionUuidRef.current 
+          }
         })
       });
     }
@@ -141,10 +168,19 @@ export default function FocusPulseApp() {
     setIsCompleted(false);
     setMilestoneNudge(null);
     setSecondsLeft(totalSeconds);
+    sessionUuidRef.current = '';
   };
 
-  // Event 3: Session Completed (Primary Conversion Metric)
+  // Event 3: Session Completed (Guaranteed single execution per session_uuid)
   const handleSessionCompleted = async () => {
+    const currentSessionId = sessionUuidRef.current || `sess_${Date.now()}`;
+    
+    // Anti-Spam: deduplicate completed event
+    if (completedSessionsRef.current.has(currentSessionId)) {
+      return;
+    }
+    completedSessionsRef.current.add(currentSessionId);
+
     setIsActive(false);
     setIsCompleted(true);
     setHasStarted(false);
@@ -166,10 +202,16 @@ export default function FocusPulseApp() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        event_id: `comp_${currentSessionId}`,
         user_id: userId,
         variant,
         event_name: 'session_completed',
-        metadata: { taskName, duration_seconds: totalSeconds }
+        metadata: { 
+          taskName, 
+          duration_seconds: totalSeconds,
+          is_demo_mode: isDemoMode,
+          session_uuid: currentSessionId
+        }
       })
     });
 
@@ -186,14 +228,18 @@ export default function FocusPulseApp() {
     setLoading(false);
     resetTimer();
 
+    // Log exposure for new identity
+    const exposureKey = `fp_exposed_${newId}`;
+    sessionStorage.setItem(exposureKey, 'true');
     await fetch('/api/events', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        event_id: `exp_${newId}_${Date.now()}`,
         user_id: newId,
         variant: newVariant,
         event_name: 'experiment_exposed',
-        metadata: { source: 'identity_reset' }
+        metadata: { source: 'identity_reset', is_demo_mode: isDemoMode }
       })
     });
   };
@@ -206,11 +252,22 @@ export default function FocusPulseApp() {
 
   const progressPct = ((totalSeconds - secondsLeft) / totalSeconds) * 100;
 
+  // =========================================================================
+  // ZERO-FLICKER SKELETON LOADER
+  // =========================================================================
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-400 gap-3">
-        <div className="w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full animate-spin"></div>
-        <p className="text-xs font-mono">Evaluating Flagsmith Experiment Flag...</p>
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 text-slate-400">
+        <div className="max-w-md w-full bg-slate-900/60 border border-slate-800/80 rounded-3xl p-8 flex flex-col items-center space-y-6 animate-pulse">
+          <div className="w-12 h-12 bg-slate-800 rounded-2xl"></div>
+          <div className="h-4 w-32 bg-slate-800 rounded-full"></div>
+          <div className="h-20 w-48 bg-slate-800/80 rounded-2xl"></div>
+          <div className="h-10 w-40 bg-slate-800 rounded-xl"></div>
+          <div className="flex items-center gap-2 text-xs font-mono text-slate-500 pt-2">
+            <ShieldCheck className="w-4 h-4 text-brand-400 animate-spin" />
+            <span>Resolving Flagsmith Multivariate Flag...</span>
+          </div>
+        </div>
       </div>
     );
   }
@@ -246,13 +303,13 @@ export default function FocusPulseApp() {
             <span>{isDemoMode ? 'Demo Mode (60s)' : 'Standard (25m)'}</span>
           </button>
 
-          <a
+          <Link
             href="/results"
             className="text-xs bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 px-3 py-1.5 rounded-lg font-medium transition flex items-center gap-1.5"
           >
             <BarChart3 className="w-3.5 h-3.5 text-brand-400" />
             <span>Live Results</span>
-          </a>
+          </Link>
         </div>
       </header>
 

@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { 
   BarChart3, ArrowLeft, RefreshCw, Users, Play, 
-  CheckCircle2, TrendingUp, AlertTriangle, Zap, ExternalLink 
+  CheckCircle2, TrendingUp, AlertTriangle, Zap, Download, Filter 
 } from 'lucide-react';
 
 interface VariantStats {
@@ -28,6 +28,7 @@ export default function ResultsPage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [simulating, setSimulating] = useState<boolean>(false);
+  const [filterNoise, setFilterNoise] = useState<boolean>(true);
   const [stats, setStats] = useState<{
     minimal: VariantStats;
     gamified: VariantStats;
@@ -41,7 +42,7 @@ export default function ResultsPage() {
   const fetchStats = async () => {
     try {
       setRefreshing(true);
-      const res = await fetch('/api/stats');
+      const res = await fetch(`/api/stats?filterNoise=${filterNoise}`);
       const data = await res.json();
       if (data.success) {
         setStats(data.summary);
@@ -58,9 +59,9 @@ export default function ResultsPage() {
 
   useEffect(() => {
     fetchStats();
-    const interval = setInterval(fetchStats, 5000); // Live poll every 5s
+    const interval = setInterval(fetchStats, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [filterNoise]);
 
   const handleSimulate = async () => {
     setSimulating(true);
@@ -123,7 +124,41 @@ export default function ResultsPage() {
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Noise Filter Toggle */}
+            <button
+              onClick={() => setFilterNoise(!filterNoise)}
+              className={`text-xs px-3 py-2 rounded-xl border transition flex items-center gap-1.5 font-medium ${
+                filterNoise
+                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                  : 'bg-slate-900 text-slate-400 border-slate-800'
+              }`}
+              title="Filters sessions abandoned in under 10 seconds to eliminate click noise and bots"
+            >
+              <Filter className="w-3.5 h-3.5" />
+              <span>{filterNoise ? 'Noise Filter (ON)' : 'Noise Filter (OFF)'}</span>
+            </button>
+
+            {/* CSV Export Button */}
+            <a
+              href="/api/stats?format=csv"
+              download="focuspulse_events_export.csv"
+              className="bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 px-3 py-2 rounded-xl text-xs font-semibold transition flex items-center gap-1.5"
+            >
+              <Download className="w-3.5 h-3.5 text-brand-400" />
+              <span>Export CSV</span>
+            </a>
+
+            {/* JSON Export Button */}
+            <a
+              href="/api/stats?format=json"
+              download="focuspulse_events_export.json"
+              className="bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 px-3 py-2 rounded-xl text-xs font-semibold transition flex items-center gap-1.5"
+            >
+              <Download className="w-3.5 h-3.5 text-accent-400" />
+              <span>JSON</span>
+            </a>
+
             <button
               onClick={handleSimulate}
               disabled={simulating}
