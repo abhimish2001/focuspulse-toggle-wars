@@ -3,7 +3,8 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { 
-  ArrowLeft, RefreshCw, TrendingUp, Zap, Download, Filter, FlaskConical, AlertCircle, X 
+  ArrowLeft, RefreshCw, TrendingUp, Zap, Download, Filter, 
+  FlaskConical, AlertCircle, X, ExternalLink, Sparkles 
 } from 'lucide-react';
 
 interface VariantStats {
@@ -23,6 +24,22 @@ interface EventItem {
   metadata: string;
 }
 
+interface FlagsmithExperimentStats {
+  configured: boolean;
+  experimentId: string;
+  envId: string;
+  dashboardUrl: string;
+  status: string | null;
+  name?: string | null;
+  as_of?: string | null;
+  error?: string;
+  chance_to_win: number | null;
+  relative_lift: number | null;
+  ci_low: number | null;
+  ci_high: number | null;
+  srm_p_value: number | null;
+}
+
 function parseMeta(raw: string | null): Record<string, any> {
   if (!raw) return {};
   try {
@@ -34,6 +51,7 @@ function parseMeta(raw: string | null): Record<string, any> {
 
 export default function ResultsPage() {
   const [refreshing, setRefreshing] = useState<boolean>(false);
+  const [refreshingBayesian, setRefreshingBayesian] = useState<boolean>(false);
   const [simulating, setSimulating] = useState<boolean>(false);
   const [showAdminControls, setShowAdminControls] = useState<boolean>(false);
   const [toast, setToast] = useState<{ type: 'error' | 'success'; message: string } | null>(null);
@@ -49,6 +67,7 @@ export default function ResultsPage() {
   });
   const [lift, setLift] = useState<number>(0);
   const [recentEvents, setRecentEvents] = useState<EventItem[]>([]);
+  const [flagsmithExp, setFlagsmithExp] = useState<FlagsmithExperimentStats | null>(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -76,6 +95,18 @@ export default function ResultsPage() {
     return trimmed;
   }, []);
 
+  const fetchFlagsmithExperiment = useCallback(async () => {
+    try {
+      const res = await fetch('/api/flagsmith-experiment');
+      if (res.ok) {
+        const data = await res.json();
+        setFlagsmithExp(data);
+      }
+    } catch (e) {
+      console.error('Error fetching Flagsmith experiment results:', e);
+    }
+  }, []);
+
   const fetchStats = useCallback(async () => {
     try {
       setRefreshing(true);
@@ -96,9 +127,10 @@ export default function ResultsPage() {
 
   useEffect(() => {
     fetchStats();
+    fetchFlagsmithExperiment();
     const interval = setInterval(fetchStats, 5000);
     return () => clearInterval(interval);
-  }, [fetchStats]);
+  }, [fetchStats, fetchFlagsmithExperiment]);
 
   const handleSimulate = async () => {
     const secret = getAdminSecret();
@@ -169,6 +201,48 @@ export default function ResultsPage() {
     } catch (e) {
       console.error(e);
       showToast('error', 'Network error resetting data.');
+    }
+  };
+
+  const handleRefreshFlagsmith = async () => {
+    const secret = getAdminSecret();
+    if (!secret) return;
+
+    setRefreshingBayesian(true);
+    try {
+      const res = await fetch('/api/flagsmith-experiment', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-secret': secret,
+        },
+        body: JSON.stringify({ action: 'refresh' }),
+      });
+
+      if (res.status === 401) {
+        sessionStorage.removeItem('fp_admin_secret');
+        showToast('error', 'Unauthorized (401): Invalid Admin Secret.');
+        return;
+      }
+
+      const data = await res.json();
+      if (res.status === 429) {
+        showToast('error', data.error || 'Flagsmith refresh is limited to once every 5 minutes.');
+        return;
+      }
+
+      if (!res.ok) {
+        showToast('error', data.error || 'Failed to refresh Flagsmith Bayesian Engine.');
+        return;
+      }
+
+      setFlagsmithExp(data);
+      showToast('success', 'Flagsmith Bayesian Engine refreshed.');
+    } catch (e) {
+      console.error(e);
+      showToast('error', 'Network error refreshing Flagsmith Bayesian Engine.');
+    } finally {
+      setRefreshingBayesian(false);
     }
   };
 
@@ -291,7 +365,10 @@ export default function ResultsPage() {
             )}
 
             <button
-              onClick={fetchStats}
+              onClick={() => {
+                fetchStats();
+                fetchFlagsmithExperiment();
+              }}
               disabled={refreshing}
               className="bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 p-2 rounded-xl transition"
               title="Refresh"
@@ -332,6 +409,104 @@ export default function ResultsPage() {
             <div className="text-[10px] text-slate-500 mt-0.5">High Engagement</div>
           </div>
         </div>
+
+        {/* FLAGSMITH BAYESIAN ENGINE CARD */}
+        <section className="bg-slate-900/80 border border-brand-500/25 rounded-2xl p-5 sm:p-6">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+            <div className="flex items-center gap-2.5">
+              <Sparkles className="w-5 h-5 text-brand-400" />
+              <div>
+                <h2 className="text-base font-bold text-white flex items-center gap-2">
+                  <span>Flagsmith Bayesian Engine (#{flagsmithExp?.experimentId || '451'})</span>
+                  {flagsmithExp?.status && (
+                    <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                      {flagsmithExp.status}
+                    </span>
+                  )}
+                </h2>
+                <p className="text-xs text-slate-400">
+                  Live Bayesian inference synced from Flagsmith Cloud Experimentation.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {showAdminControls && (
+                <button
+                  onClick={handleRefreshFlagsmith}
+                  disabled={refreshingBayesian}
+                  className="text-xs bg-brand-600 hover:bg-brand-500 disabled:opacity-60 text-white px-3 py-1.5 rounded-xl font-semibold transition flex items-center gap-1.5 shadow-sm shadow-brand-500/20"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${refreshingBayesian ? 'animate-spin' : ''}`} />
+                  <span>{refreshingBayesian ? 'Refreshing Engine...' : 'Refresh Flagsmith Bayesian Engine'}</span>
+                </button>
+              )}
+
+              {flagsmithExp?.dashboardUrl && (
+                <a
+                  href={flagsmithExp.dashboardUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs bg-slate-950 hover:bg-slate-800 text-slate-200 border border-slate-700 px-3 py-1.5 rounded-xl font-medium transition flex items-center gap-1.5"
+                >
+                  <span>Open Flagsmith Dashboard</span>
+                  <ExternalLink className="w-3.5 h-3.5 text-brand-400" />
+                </a>
+              )}
+            </div>
+          </div>
+
+          {!flagsmithExp ? (
+            <div className="text-xs font-mono text-slate-500">Loading Flagsmith Bayesian metrics...</div>
+          ) : !flagsmithExp.configured ? (
+            <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-4 text-xs text-slate-400 flex flex-wrap items-center justify-between gap-2">
+              <span>
+                <strong className="text-slate-200">Server token not configured:</strong> Set optional <code className="text-amber-400">FLAGSMITH_API_TOKEN</code> on the server to pull Bayesian Win Probability and Credible Intervals directly into this panel.
+              </span>
+            </div>
+          ) : flagsmithExp.error ? (
+            <div className="bg-rose-950/30 border border-rose-500/30 rounded-xl p-4 text-xs text-rose-300 font-mono">
+              {flagsmithExp.error}
+            </div>
+          ) : flagsmithExp.chance_to_win === null ? (
+            <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-4 text-xs text-slate-400">
+              Experiment <strong className="text-slate-200">#{flagsmithExp.experimentId}</strong> is <span className="text-emerald-400 font-mono">{flagsmithExp.status || 'active'}</span>. Warehouse Bayesian inference will populate once Flagsmith finishes its first aggregation refresh.
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 text-center">
+                <div className="text-[10px] uppercase font-mono text-slate-400">Win Probability</div>
+                <div className="text-xl font-bold font-mono text-emerald-400 mt-1">
+                  {(flagsmithExp.chance_to_win * 100).toFixed(2)}%
+                </div>
+              </div>
+              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 text-center">
+                <div className="text-[10px] uppercase font-mono text-slate-400">Bayesian Lift</div>
+                <div className="text-xl font-bold font-mono text-brand-400 mt-1">
+                  {flagsmithExp.relative_lift !== null
+                    ? `${flagsmithExp.relative_lift >= 0 ? '+' : ''}${(flagsmithExp.relative_lift * 100).toFixed(1)}%`
+                    : '—'}
+                </div>
+              </div>
+              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 text-center">
+                <div className="text-[10px] uppercase font-mono text-slate-400">95% Credible Interval</div>
+                <div className="text-xs font-bold font-mono text-slate-200 mt-2">
+                  {flagsmithExp.ci_low !== null && flagsmithExp.ci_high !== null
+                    ? `[${(flagsmithExp.ci_low * 100).toFixed(1)}%, ${(flagsmithExp.ci_high * 100).toFixed(1)}%]`
+                    : '—'}
+                </div>
+              </div>
+              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 text-center">
+                <div className="text-[10px] uppercase font-mono text-slate-400">SRM Health</div>
+                <div className="text-xs font-bold font-mono text-slate-200 mt-2">
+                  {flagsmithExp.srm_p_value !== null
+                    ? `p=${flagsmithExp.srm_p_value.toFixed(4)} (${flagsmithExp.srm_p_value < 0.01 ? 'Alert' : 'Healthy'})`
+                    : 'Balanced'}
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
 
         {/* SIDE-BY-SIDE VARIANT COMPARISON */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

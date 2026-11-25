@@ -11,10 +11,51 @@ import {
   getOrCreateUserId, 
   resetUserId, 
   initFlagsmithClient, 
-  trackFlagsmithConversion, 
+  trackFlagsmithEvent,
+  updateUserTraits,
+  subscribeVariantChange,
   getFlagSource,
   FocusVariant 
 } from '../lib/flagsmith';
+
+function playCompletionChime() {
+  if (typeof window === 'undefined') return;
+  try {
+    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const notes = [523.25, 659.25, 783.99]; // C5 -> E5 -> G5
+    const now = ctx.currentTime;
+
+    notes.forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + idx * 0.14);
+
+      gain.gain.setValueAtTime(0.001, now + idx * 0.14);
+      gain.gain.exponentialRampToValueAtTime(0.12, now + idx * 0.14 + 0.03);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + idx * 0.14 + 0.55);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + idx * 0.14);
+      osc.stop(now + idx * 0.14 + 0.6);
+    });
+
+    setTimeout(() => {
+      ctx.close().catch(() => {});
+    }, 1500);
+  } catch {
+    // Ignore audio errors in headless or autoplay-restricted browsers
+  }
+}
+
+function formatTime(secs: number) {
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+}
 
 export default function FocusPulseApp() {
   const [userId, setUserId] = useState<string>('');
@@ -33,13 +74,14 @@ export default function FocusPulseApp() {
   const [hasStarted, setHasStarted] = useState<boolean>(false);
   const [isCompleted, setIsCompleted] = useState<boolean>(false);
 
-  // Gamification State (Variant B)
-  const [streakCount, setStreakCount] = useState<number>(4);
-  const [xpEarned, setXpEarned] = useState<number>(360);
+  // Gamification State (Variant B) — hydrated from localStorage
+  const [streakCount, setStreakCount] = useState<number>(0);
+  const [xpEarned, setXpEarned] = useState<number>(0);
   const [milestoneNudge, setMilestoneNudge] = useState<string | null>(null);
 
-  // Synchronous Refs for strict anti-spam, deduplication, and pagehide abandonment
+  // Synchronous Refs for drift-free timer, anti-spam, deduplication, and pagehide abandonment
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const endTimestampRef = useRef<number | null>(null);
   const sessionUuidRef = useRef<string>('');
   const isActiveRef = useRef<boolean>(false);
   const hasStartedRef = useRef<boolean>(false);
@@ -52,13 +94,41 @@ export default function FocusPulseApp() {
   const totalSecondsRef = useRef<number>(25 * 60);
   const secondsLeftRef = useRef<number>(25 * 60);
   const isDemoModeRef = useRef<boolean>(false);
+  const focusMinutesRef = useRef<25 | 5>(25);
+  const streakRef = useRef<number>(0);
+  const xpRef = useRef<number>(0);
 
-  // Keep refs synchronized with latest state for pagehide/beforeunload handlers
+  // Keep refs synchronized with latest state
   useEffect(() => { userIdRef.current = userId; }, [userId]);
   useEffect(() => { if (variant) variantRef.current = variant; }, [variant]);
   useEffect(() => { totalSecondsRef.current = totalSeconds; }, [totalSeconds]);
   useEffect(() => { secondsLeftRef.current = secondsLeft; }, [secondsLeft]);
   useEffect(() => { isDemoModeRef.current = isDemoMode; }, [isDemoMode]);
+  useEffect(() => { focusMinutesRef.current = focusMinutes; }, [focusMinutes]);
+  useEffect(() => { streakRef.current = streakCount; }, [streakCount]);
+  useEffect(() => { xpRef.current = xpEarned; }, [xpEarned]);
+
+  // Hydrate persisted Variant B streak & XP from localStorage on mount
+  useEffect(() => {
+    try {
+      const savedStreak = parseInt(localStorage.getItem('fp_streak') || '0', 10);
+      const savedXp = parseInt(localStorage.getItem('fp_xp') || '0', 10);
+      const validStreak = Number.isFinite(savedStreak) && savedStreak >= 0 ? savedStreak : 0;
+      const validXp = Number.isFinite(savedXp) && savedXp >= 0 ? savedXp : 0;
+      setStreakCount(validStreak);
+      setXpEarned(validXp);
+      streakRef.current = validStreak;
+      xpRef.current = validXp;
+    } catch {}
+  }, []);
+
+  // Live countdown in browser tab title while running
+  useEffect(() => {
+    document.title = isActive ? `${formatTime(secondsLeft)} — FocusPulse` : 'FocusPulse — Focus Timer';
+    return () => {
+      document.title = 'FocusPulse — Focus Timer';
+    };
+  }, [isActive, secondsLeft]);
 
   const sendExposureIfNeeded = useCallback(async (id: string, assignedVariant: FocusVariant, demoMode: boolean, source?: string) => {
     const exposureKey = `fp_exposed_${id}`;
@@ -110,8 +180,19 @@ export default function FocusPulseApp() {
     }
 
     setupExperiment();
+
+    const unsubscribe = subscribeVariantChange((liveVariant) => {
+      if (cancelled) return;
+      if (variantRef.current !== liveVariant) {
+        variantRef.current = liveVariant;
+        setVariant(liveVariant);
+        setFlagSource(getFlagSource());
+      }
+    });
+
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, [sendExposureIfNeeded]);
 
@@ -137,7 +218,11 @@ export default function FocusPulseApp() {
         sid
       ) {
         hasAbandonedRef.current = true;
-        const elapsed = Math.max(0, totalSecondsRef.current - secondsLeftRef.current);
+        const currentRemaining = endTimestampRef.current
+          ? Math.max(0, Math.ceil((endTimestampRef.current - Date.now()) / 1000))
+          : secondsLeftRef.current;
+        const elapsed = Math.max(0, totalSecondsRef.current - currentRemaining);
+
         const payload = JSON.stringify({
           event_id: `aban_${sid}`,
           user_id: userIdRef.current,
@@ -163,7 +248,7 @@ export default function FocusPulseApp() {
     };
   }, []);
 
-  // 3. Pure countdown interval (no side-effect calls inside setState updater)
+  // 3. Drift-free wall-clock countdown interval (ticks every 250ms against endTimestampRef)
   useEffect(() => {
     if (!isActive) {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -171,8 +256,11 @@ export default function FocusPulseApp() {
     }
 
     timerRef.current = setInterval(() => {
-      setSecondsLeft((prev) => (prev > 0 ? prev - 1 : 0));
-    }, 1000);
+      if (!endTimestampRef.current) return;
+      const remaining = Math.max(0, Math.ceil((endTimestampRef.current - Date.now()) / 1000));
+      secondsLeftRef.current = remaining;
+      setSecondsLeft((prev) => (prev !== remaining ? remaining : prev));
+    }, 250);
 
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -189,15 +277,27 @@ export default function FocusPulseApp() {
     hasCompletedRef.current = true;
     isActiveRef.current = false;
     hasStartedRef.current = false;
+    endTimestampRef.current = null;
     completedSessionsRef.current.add(currentSessionId);
 
     setIsActive(false);
     setIsCompleted(true);
     setHasStarted(false);
 
+    playCompletionChime();
+
     if (variantRef.current === 'gamified') {
-      setStreakCount((prev) => prev + 1);
-      setXpEarned((prev) => prev + 120);
+      const nextStreak = streakRef.current + 1;
+      const nextXp = xpRef.current + 120;
+      streakRef.current = nextStreak;
+      xpRef.current = nextXp;
+      setStreakCount(nextStreak);
+      setXpEarned(nextXp);
+      try {
+        localStorage.setItem('fp_streak', String(nextStreak));
+        localStorage.setItem('fp_xp', String(nextXp));
+      } catch {}
+
       try {
         confetti({
           particleCount: 120,
@@ -206,6 +306,8 @@ export default function FocusPulseApp() {
         });
       } catch {}
     }
+
+    const sessionMinutes = isDemoModeRef.current ? 1 : focusMinutesRef.current;
 
     // 1. Log to local SQLite analytics database
     await fetch('/api/events', {
@@ -219,14 +321,18 @@ export default function FocusPulseApp() {
         metadata: {
           taskName,
           duration_seconds: totalSecondsRef.current,
+          focus_minutes: sessionMinutes,
           is_demo_mode: isDemoModeRef.current,
           session_uuid: currentSessionId,
         },
       }),
     });
 
-    // 2. Dispatch conversion event to Flagsmith Experimentation (matches metric "session_completed")
-    await trackFlagsmithConversion('session_completed');
+    // 2. Dispatch conversion event + duration value to Flagsmith Experimentation
+    await trackFlagsmithEvent('session_completed', sessionMinutes, {
+      is_demo_mode: isDemoModeRef.current,
+      duration_seconds: totalSecondsRef.current,
+    });
   }, [taskName]);
 
   useEffect(() => {
@@ -248,7 +354,7 @@ export default function FocusPulseApp() {
 
   // Event 1: Session Started (Synchronous double-click & Resume deduplication)
   const startTimer = async () => {
-    if (isActiveRef.current) return; // Guard rapid double-clicks synchronously
+    if (isActiveRef.current) return;
     isActiveRef.current = true;
 
     const isFreshSession = !hasStartedRef.current;
@@ -259,6 +365,8 @@ export default function FocusPulseApp() {
       hasAbandonedRef.current = false;
     }
 
+    endTimestampRef.current = Date.now() + secondsLeftRef.current * 1000;
+
     const currentSid = sessionUuidRef.current;
     setIsActive(true);
     setHasStarted(true);
@@ -267,6 +375,8 @@ export default function FocusPulseApp() {
 
     if (isFreshSession && !startedSessionsRef.current.has(currentSid)) {
       startedSessionsRef.current.add(currentSid);
+      const preferredMinutes = isDemoModeRef.current ? 1 : focusMinutesRef.current;
+
       await fetch('/api/events', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -283,10 +393,24 @@ export default function FocusPulseApp() {
           },
         }),
       });
+
+      await updateUserTraits({
+        preferred_minutes: preferredMinutes,
+      });
+
+      await trackFlagsmithEvent('session_started', preferredMinutes, {
+        is_demo_mode: isDemoModeRef.current,
+      });
     }
   };
 
   const pauseTimer = () => {
+    if (endTimestampRef.current) {
+      const remaining = Math.max(0, Math.ceil((endTimestampRef.current - Date.now()) / 1000));
+      secondsLeftRef.current = remaining;
+      setSecondsLeft(remaining);
+    }
+    endTimestampRef.current = null;
     isActiveRef.current = false;
     setIsActive(false);
   };
@@ -294,12 +418,17 @@ export default function FocusPulseApp() {
   // Event 2: Session Abandoned (Includes elapsed_seconds for bot/noise filtering)
   const resetTimer = async () => {
     const sid = sessionUuidRef.current;
-    const elapsed = Math.max(0, totalSecondsRef.current - secondsLeftRef.current);
+    const currentRemaining = endTimestampRef.current
+      ? Math.max(0, Math.ceil((endTimestampRef.current - Date.now()) / 1000))
+      : secondsLeftRef.current;
+    const elapsed = Math.max(0, totalSecondsRef.current - currentRemaining);
+
     const shouldLogAbandon =
-      (isActiveRef.current || (hasStartedRef.current && secondsLeftRef.current > 0 && !hasCompletedRef.current)) &&
+      (isActiveRef.current || (hasStartedRef.current && currentRemaining > 0 && !hasCompletedRef.current)) &&
       !hasAbandonedRef.current &&
       Boolean(sid);
 
+    endTimestampRef.current = null;
     isActiveRef.current = false;
     hasStartedRef.current = false;
     hasCompletedRef.current = false;
@@ -320,8 +449,14 @@ export default function FocusPulseApp() {
             is_demo_mode: isDemoModeRef.current,
             session_uuid: sid,
             reason: 'user_reset',
+            forwarded_by_client: true,
           },
         }),
+      });
+
+      await trackFlagsmithEvent('session_abandoned', elapsed, {
+        is_demo_mode: isDemoModeRef.current,
+        reason: 'user_reset',
       });
     }
 
@@ -348,12 +483,6 @@ export default function FocusPulseApp() {
     setLoading(false);
 
     await sendExposureIfNeeded(newId, newVariant, isDemoModeRef.current, 'identity_reset');
-  };
-
-  const formatTime = (secs: number) => {
-    const m = Math.floor(secs / 60);
-    const s = secs % 60;
-    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
   const progressPct = totalSeconds > 0 ? ((totalSeconds - secondsLeft) / totalSeconds) * 100 : 0;
@@ -531,11 +660,11 @@ export default function FocusPulseApp() {
         {variant === 'gamified' && (
           <div className="flex flex-col items-center text-center">
             
-            {/* Gamified Top Badges: Streak & XP */}
+            {/* Gamified Top Badges: Persisted Streak & XP */}
             <div className="flex items-center gap-3 mb-6">
               <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-semibold shadow-sm">
                 <Flame className="w-3.5 h-3.5 fill-amber-500" />
-                <span>{streakCount} Day Streak</span>
+                <span>{streakCount} {streakCount === 1 ? 'Session' : 'Sessions'} Streak</span>
               </div>
               <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 text-xs font-semibold shadow-sm">
                 <Trophy className="w-3.5 h-3.5" />
@@ -568,7 +697,7 @@ export default function FocusPulseApp() {
                   cx="50"
                   cy="50"
                   r="42"
-                  className="stroke-brand-500 transition-all duration-1000 ease-linear"
+                  className="stroke-brand-500 transition-all duration-300 ease-linear"
                   strokeWidth="6"
                   strokeDasharray="264"
                   strokeDashoffset={264 - (264 * progressPct) / 100}
@@ -636,11 +765,11 @@ export default function FocusPulseApp() {
                 <div className="grid grid-cols-2 gap-2 text-xs font-semibold mb-4">
                   <div className="bg-slate-950 p-2 rounded-lg border border-slate-800">
                     <span className="text-slate-400 block text-[10px]">XP GAINED</span>
-                    <span className="text-indigo-400">+120 XP</span>
+                    <span className="text-indigo-400">+120 XP ({xpEarned} total)</span>
                   </div>
                   <div className="bg-slate-950 p-2 rounded-lg border border-slate-800">
                     <span className="text-slate-400 block text-[10px]">CURRENT STREAK</span>
-                    <span className="text-amber-400">{streakCount} Days 🔥</span>
+                    <span className="text-amber-400">{streakCount} {streakCount === 1 ? 'Session' : 'Sessions'} 🔥</span>
                   </div>
                 </div>
                 <button

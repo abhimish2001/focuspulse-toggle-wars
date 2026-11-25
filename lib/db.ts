@@ -11,6 +11,9 @@ function getDb(): DatabaseSync {
     fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
     dbInstance = new DatabaseSync(DB_FILE);
     dbInstance.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA busy_timeout = 5000;
+
       CREATE TABLE IF NOT EXISTS events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         event_id TEXT UNIQUE NOT NULL,

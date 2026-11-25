@@ -9,6 +9,48 @@ const ALLOWED_EVENTS = new Set([
   'session_completed',
 ]);
 
+const FLAGSMITH_EVENTS_ENDPOINT = 'https://events.api.flagsmith.com/v1/events';
+
+async function forwardAbandonmentToFlagsmith(
+  userId: string,
+  metadata: Record<string, any> | undefined
+) {
+  const envKey = process.env.NEXT_PUBLIC_FLAGSMITH_ENV_KEY?.trim();
+  if (!envKey) return;
+
+  const elapsed =
+    typeof metadata?.elapsed_seconds === 'number' ? String(metadata.elapsed_seconds) : null;
+
+  try {
+    await fetch(FLAGSMITH_EVENTS_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        'X-Environment-Key': envKey,
+      },
+      body: JSON.stringify({
+        events: [
+          {
+            event: 'session_abandoned',
+            feature_name: null,
+            identifier: userId,
+            value: elapsed,
+            traits: null,
+            metadata: {
+              ...(metadata || {}),
+              forwarded_from: 'next_api_events',
+            },
+            timestamp: Date.now(),
+          },
+        ],
+      }),
+      signal: AbortSignal.timeout(3000),
+    });
+  } catch (err) {
+    console.warn('[Flagsmith] Server-side abandonment forward skipped:', err);
+  }
+}
+
 export async function POST(req: Request) {
   try {
     const rawBody = await req.text();
@@ -36,6 +78,15 @@ export async function POST(req: Request) {
       event_name,
       metadata,
     });
+
+    // Forward tab-close / API abandonments to Flagsmith Cloud when not already sent by client SDK
+    if (
+      event_name === 'session_abandoned' &&
+      result.inserted &&
+      !metadata?.forwarded_by_client
+    ) {
+      await forwardAbandonmentToFlagsmith(String(user_id), metadata);
+    }
 
     return NextResponse.json({
       success: true,
