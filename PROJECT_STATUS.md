@@ -29,7 +29,8 @@
 | [`.env.local`](.env.local) | Local environment file (gitignored) containing `NEXT_PUBLIC_FLAGSMITH_ENV_KEY` for the Flagsmith Development environment and `DATABASE_PATH=./focuspulse.db`. *(Note: `.env` also exists locally from earlier setup and is gitignored.)* |
 | [`.gitignore`](.gitignore) | Excludes `node_modules/`, `.next/`, `*.db`, `.env`, `.env.local`, `.flagsmith`, and `*.log`. |
 | [`flagsmith.json`](flagsmith.json) | Binds Flagsmith CLI to Project `55855` and Environment `esMZQYfcANsHcmozTaXb6F`. |
-| [`README.md`](README.md) | Pre-written Toggle Wars Track 01 submission README with hypothesis, Mermaid architecture diagram, Flagsmith IDs, event schema, and a live results snapshot template. |
+| [`Dockerfile`](Dockerfile) & [`.dockerignore`](.dockerignore) | Multi-stage `node:22-slim` production Docker build exposing port `3000` (`NODE_ENV=production`) with clean `.dockerignore` for Railway/Render deployment. |
+| [`README.md`](README.md) | Pre-written Toggle Wars Track 01 submission README with hypothesis, Mermaid architecture diagram, Flagsmith IDs, event schema, Railway/Render persistent volume deployment guide, and live results snapshot template. |
 
 ### C. Flagsmith Cloud Resources (Verified Running)
 
@@ -55,12 +56,11 @@
 
 ## 2. What Is Remaining (Manual / Pre-Submission Steps)
 
-### 1. Deployment & Hosting Setup
-- [ ] **Choose a hosting target compatible with SQLite (or swap database):**
-  - `lib/db.ts` uses local file-based `node:sqlite` (`focuspulse.db`) on Node 22/24.
-  - **If deploying to a persistent Node server / VPS / Railway / Render / Fly.io with a persistent volume:** Ensure Node.js 22.5+ (`node:sqlite` support) and mount persistent storage for `DATABASE_PATH`.
-  - **If deploying to serverless (e.g., Vercel):** Ephemeral serverless filesystems do not share `focuspulse.db` across invocations or cold starts — update `lib/db.ts` to use Postgres (Neon/Supabase) or Turso (libSQL) before deploying.
-- [ ] **Set Environment Variable in Host:** Add `NEXT_PUBLIC_FLAGSMITH_ENV_KEY` (`esMZQYfcANsHcmozTaXb6F`) in your hosting provider's environment settings.
+### 1. Deployment & Hosting Setup (Railway / Render Ready)
+- [ ] **Deploy via [`Dockerfile`](Dockerfile) on Railway or Render:**
+  - Connect the GitHub repo (auto-detects `Dockerfile` using `node:22-slim`).
+  - Attach a Persistent Volume mounted at `/data`.
+  - Set `NEXT_PUBLIC_FLAGSMITH_ENV_KEY`, `DATABASE_PATH=/data/focuspulse.db`, `ADMIN_SECRET=<strong-secret>`, and `NEXT_PUBLIC_ENABLE_DEMO_CONTROLS=false`.
 - [ ] **Push Repository to Public GitHub:**
   - Create a public GitHub repository, add `origin`, and push (`git push -u origin master`).
   - Confirm `.env` and `.env.local` are **not** visible on GitHub.

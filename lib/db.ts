@@ -1,3 +1,4 @@
+import fs from 'fs';
 import { DatabaseSync } from 'node:sqlite';
 import path from 'path';
 
@@ -7,6 +8,7 @@ let dbInstance: DatabaseSync | null = null;
 
 function getDb(): DatabaseSync {
   if (!dbInstance) {
+    fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
     dbInstance = new DatabaseSync(DB_FILE);
     dbInstance.exec(`
       CREATE TABLE IF NOT EXISTS events (

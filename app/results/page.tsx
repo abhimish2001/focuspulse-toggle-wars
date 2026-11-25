@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { 
-  ArrowLeft, RefreshCw, TrendingUp, Zap, Download, Filter, FlaskConical 
+  ArrowLeft, RefreshCw, TrendingUp, Zap, Download, Filter, FlaskConical, AlertCircle, X 
 } from 'lucide-react';
 
 interface VariantStats {
@@ -35,6 +35,8 @@ function parseMeta(raw: string | null): Record<string, any> {
 export default function ResultsPage() {
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [simulating, setSimulating] = useState<boolean>(false);
+  const [showAdminControls, setShowAdminControls] = useState<boolean>(false);
+  const [toast, setToast] = useState<{ type: 'error' | 'success'; message: string } | null>(null);
   const [filterNoise, setFilterNoise] = useState<boolean>(true);
   const [includeDemo, setIncludeDemo] = useState<boolean>(true);
   const [excludedNoiseCount, setExcludedNoiseCount] = useState<number>(0);
@@ -47,6 +49,32 @@ export default function ResultsPage() {
   });
   const [lift, setLift] = useState<number>(0);
   const [recentEvents, setRecentEvents] = useState<EventItem[]>([]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const isAdminQuery = params.get('admin') === '1';
+    const isEnvEnabled = process.env.NEXT_PUBLIC_ENABLE_DEMO_CONTROLS === 'true';
+    setShowAdminControls(isAdminQuery || isEnvEnabled);
+  }, []);
+
+  const showToast = useCallback((type: 'error' | 'success', message: string) => {
+    setToast({ type, message });
+    setTimeout(() => {
+      setToast((prev) => (prev?.message === message ? null : prev));
+    }, 5000);
+  }, []);
+
+  const getAdminSecret = useCallback((): string | null => {
+    const cached = sessionStorage.getItem('fp_admin_secret');
+    if (cached) return cached;
+
+    const entered = window.prompt('Enter Admin Secret:');
+    if (!entered || !entered.trim()) return null;
+
+    const trimmed = entered.trim();
+    sessionStorage.setItem('fp_admin_secret', trimmed);
+    return trimmed;
+  }, []);
 
   const fetchStats = useCallback(async () => {
     try {
@@ -73,32 +101,74 @@ export default function ResultsPage() {
   }, [fetchStats]);
 
   const handleSimulate = async () => {
+    const secret = getAdminSecret();
+    if (!secret) return;
+
     setSimulating(true);
     try {
-      await fetch('/api/stats', {
+      const res = await fetch('/api/stats', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-secret': secret,
+        },
         body: JSON.stringify({ action: 'simulate', count: 20 })
       });
+
+      if (res.status === 401) {
+        sessionStorage.removeItem('fp_admin_secret');
+        showToast('error', 'Unauthorized (401): Invalid Admin Secret.');
+        return;
+      }
+
+      const data = await res.json();
+      if (!res.ok) {
+        showToast('error', data.error || 'Simulation request failed.');
+        return;
+      }
+
       await fetchStats();
+      showToast('success', 'Simulated 20 users.');
     } catch (e) {
       console.error(e);
+      showToast('error', 'Network error running simulation.');
     } finally {
       setSimulating(false);
     }
   };
 
   const handleReset = async () => {
+    const secret = getAdminSecret();
+    if (!secret) return;
     if (!confirm('Are you sure you want to reset all tracked events?')) return;
+
     try {
-      await fetch('/api/stats', {
+      const res = await fetch('/api/stats', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-secret': secret,
+        },
         body: JSON.stringify({ action: 'reset' })
       });
+
+      if (res.status === 401) {
+        sessionStorage.removeItem('fp_admin_secret');
+        showToast('error', 'Unauthorized (401): Invalid Admin Secret.');
+        return;
+      }
+
+      const data = await res.json();
+      if (!res.ok) {
+        showToast('error', data.error || 'Reset failed.');
+        return;
+      }
+
       await fetchStats();
+      showToast('success', 'Experiment database reset.');
     } catch (e) {
       console.error(e);
+      showToast('error', 'Network error resetting data.');
     }
   };
 
@@ -108,6 +178,24 @@ export default function ResultsPage() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-8 flex flex-col">
       <div className="max-w-6xl w-full mx-auto space-y-8 flex-1">
+
+        {/* TOAST NOTIFICATION */}
+        {toast && (
+          <div
+            role="alert"
+            className={`fixed bottom-5 right-5 z-50 flex items-center gap-2.5 px-4 py-3 rounded-xl border text-xs font-semibold shadow-xl backdrop-blur-md ${
+              toast.type === 'error'
+                ? 'bg-rose-950/90 text-rose-200 border-rose-500/40'
+                : 'bg-emerald-950/90 text-emerald-200 border-emerald-500/40'
+            }`}
+          >
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{toast.message}</span>
+            <button onClick={() => setToast(null)} className="opacity-70 hover:opacity-100 ml-1">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
         
         {/* HEADER */}
         <header className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800/80 pb-6">
@@ -182,14 +270,25 @@ export default function ResultsPage() {
               <span>JSON</span>
             </a>
 
-            <button
-              onClick={handleSimulate}
-              disabled={simulating}
-              className="bg-brand-600 hover:bg-brand-500 text-white px-3.5 py-2 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 shadow-md shadow-brand-500/20"
-            >
-              <Zap className="w-3.5 h-3.5" />
-              <span>{simulating ? 'Simulating...' : 'Simulate 20 Users'}</span>
-            </button>
+            {showAdminControls && (
+              <>
+                <button
+                  onClick={handleSimulate}
+                  disabled={simulating}
+                  className="bg-brand-600 hover:bg-brand-500 text-white px-3.5 py-2 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 shadow-md shadow-brand-500/20"
+                >
+                  <Zap className="w-3.5 h-3.5" />
+                  <span>{simulating ? 'Simulating...' : 'Simulate 20 Users'}</span>
+                </button>
+
+                <button
+                  onClick={handleReset}
+                  className="text-xs text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 px-3 py-2 rounded-xl transition"
+                >
+                  Reset Data
+                </button>
+              </>
+            )}
 
             <button
               onClick={fetchStats}
@@ -198,13 +297,6 @@ export default function ResultsPage() {
               title="Refresh"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-            </button>
-
-            <button
-              onClick={handleReset}
-              className="text-xs text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 px-3 py-2 rounded-xl transition"
-            >
-              Reset Data
             </button>
           </div>
         </header>
@@ -364,7 +456,7 @@ export default function ResultsPage() {
                 {recentEvents.length === 0 ? (
                   <tr>
                     <td colSpan={5} className="py-6 text-center text-slate-500">
-                      No interactions recorded yet. Start a focus session or click &quot;Simulate 20 Users&quot;.
+                      No interactions recorded yet. Start a focus session to record live events.
                     </td>
                   </tr>
                 ) : (

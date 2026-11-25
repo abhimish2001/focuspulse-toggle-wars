@@ -1,5 +1,18 @@
+import crypto from 'crypto';
 import { NextResponse } from 'next/server';
 import { getExperimentStats, logEvent, resetDatabase, getAllEventsForExport } from '../../../lib/db';
+
+/** Constant-time comparison against ADMIN_SECRET to protect admin mutations. */
+function isAuthorizedAdmin(provided: string, expected: string | undefined): boolean {
+  const expectedTrimmed = expected?.trim();
+  const providedTrimmed = provided.trim();
+  if (!expectedTrimmed || !providedTrimmed) return false;
+
+  const a = Buffer.from(providedTrimmed, 'utf8');
+  const b = Buffer.from(expectedTrimmed, 'utf8');
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
 
 export async function GET(req: Request) {
   try {
@@ -48,6 +61,14 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
+    const headerSecret = req.headers.get('x-admin-secret') || '';
+    const bodySecret = typeof body?.secret === 'string' ? body.secret : '';
+    const providedSecret = headerSecret || bodySecret;
+
+    if (!isAuthorizedAdmin(providedSecret, process.env.ADMIN_SECRET)) {
+      return NextResponse.json({ error: 'Unauthorized admin action' }, { status: 401 });
+    }
+
     const action = body.action || 'simulate';
 
     if (action === 'reset') {

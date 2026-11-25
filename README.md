@@ -132,4 +132,19 @@ Visit:
 ### Testing the Experiment
 1. Toggle **Demo Mode (60s)** in the top right to test complete sessions rapidly.
 2. Click **Reset Identity / Switch Variant** in the footer to test how new users are deterministically assigned between `minimal` and `gamified`.
-3. Click **Simulate 20 Users** on the `/results` page to watch live event ingestion and statistical lift update in real time.
+3. To access protected simulation/reset controls on `/results`, visit `/results?admin=1` and enter your `ADMIN_SECRET`.
+
+---
+
+## ☁️ 7. Deploying to Railway / Render (Persistent SQLite)
+
+FocusPulse uses Node 22/24's built-in `node:sqlite` and ships with a multi-stage [`Dockerfile`](Dockerfile) (`node:22-slim`), allowing zero-config SQLite persistence across restarts:
+
+1. **Connect Repository:** Connect this GitHub repository to **Railway** or **Render** (the platform auto-detects [`Dockerfile`](Dockerfile)).
+2. **Attach a Persistent Volume:** Mount a persistent disk/volume at `/data`.
+3. **Configure Environment Variables:**
+   - `NEXT_PUBLIC_FLAGSMITH_ENV_KEY` — Your Flagsmith client-side environment key *(note: `NEXT_PUBLIC_*` vars must be available at build time as Docker build args/env vars in Railway/Render)*.
+   - `DATABASE_PATH=/data/focuspulse.db` — Stores SQLite data on the mounted volume (`lib/db.ts` creates parent directories automatically on boot).
+   - `ADMIN_SECRET=<strong-secret>` — Secures `POST /api/stats` (`simulate` and `reset` actions).
+   - `NEXT_PUBLIC_ENABLE_DEMO_CONTROLS=false` — Keeps admin buttons hidden from public visitors unless `?admin=1` is appended.
+4. **Admin Access in Production:** Open `https://<your-domain>/results?admin=1` and enter your `ADMIN_SECRET` when prompted.
