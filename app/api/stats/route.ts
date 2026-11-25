@@ -6,6 +6,7 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const format = searchParams.get('format');
     const filterNoise = searchParams.get('filterNoise') !== 'false';
+    const includeDemo = searchParams.get('includeDemo') !== 'false';
 
     // Raw Export Support: CSV or JSON
     if (format === 'csv') {
@@ -36,7 +37,7 @@ export async function GET(req: Request) {
       });
     }
 
-    const stats = getExperimentStats(filterNoise);
+    const stats = getExperimentStats(filterNoise, includeDemo);
     return NextResponse.json({ success: true, ...stats });
   } catch (error: any) {
     console.error('Error in stats route:', error);
@@ -56,12 +57,14 @@ export async function POST(req: Request) {
 
     // Generate batch of realistic user sessions
     const count = body.count || 20;
+    const batchTs = Date.now().toString(36);
     for (let i = 0; i < count; i++) {
-      const simUser = `sim_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
+      const simUser = `sim_${batchTs}_${Math.random().toString(36).substring(2, 6)}`;
       const variant = i % 2 === 0 ? 'minimal' : 'gamified';
+      const sessionUuid = `sess_sim_${batchTs}_${i}`;
 
       logEvent({
-        event_id: `evt_sim_${Date.now()}_${i}_exp`,
+        event_id: `exp_${simUser}`,
         user_id: simUser,
         variant,
         event_name: 'experiment_exposed',
@@ -70,37 +73,37 @@ export async function POST(req: Request) {
 
       if (Math.random() < 0.90) {
         logEvent({
-          event_id: `evt_sim_${Date.now()}_${i}_start`,
+          event_id: `start_${sessionUuid}`,
           user_id: simUser,
           variant,
           event_name: 'session_started',
-          metadata: { duration_minutes: 25, is_demo_mode: false }
+          metadata: { duration_seconds: 1500, is_demo_mode: false, session_uuid: sessionUuid }
         });
 
         const completionChance = variant === 'gamified' ? 0.75 : 0.45;
         if (Math.random() < completionChance) {
           logEvent({
-            event_id: `evt_sim_${Date.now()}_${i}_comp`,
+            event_id: `comp_${sessionUuid}`,
             user_id: simUser,
             variant,
             event_name: 'session_completed',
-            metadata: { xp_earned: variant === 'gamified' ? 120 : 0, is_demo_mode: false }
+            metadata: { xp_earned: variant === 'gamified' ? 120 : 0, is_demo_mode: false, session_uuid: sessionUuid }
           });
         } else {
           // Some abandoned sessions are realistic (>10s), some are accidental click noise (<10s)
-          const elapsed = Math.random() < 0.2 ? Math.floor(Math.random() * 8) : Math.floor(Math.random() * 500) + 15;
+          const elapsed = Math.random() < 0.15 ? Math.floor(Math.random() * 8) : Math.floor(Math.random() * 500) + 15;
           logEvent({
-            event_id: `evt_sim_${Date.now()}_${i}_aban`,
+            event_id: `aban_${sessionUuid}`,
             user_id: simUser,
             variant,
             event_name: 'session_abandoned',
-            metadata: { elapsed_seconds: elapsed, is_demo_mode: false }
+            metadata: { elapsed_seconds: elapsed, is_noise: elapsed < 10, is_demo_mode: false, session_uuid: sessionUuid }
           });
         }
       }
     }
 
-    const updated = getExperimentStats(true);
+    const updated = getExperimentStats(true, true);
     return NextResponse.json({ success: true, message: `Simulated ${count} users`, ...updated });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });

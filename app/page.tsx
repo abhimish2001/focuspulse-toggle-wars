@@ -1,17 +1,25 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import confetti from 'canvas-confetti';
 import { 
-  Play, Pause, RotateCcw, Flame, Trophy, Award, 
-  BarChart3, RefreshCw, Zap, CheckCircle2, ShieldCheck 
+  Play, Pause, RotateCcw, Flame, Trophy, 
+  BarChart3, RefreshCw, Zap, ShieldCheck 
 } from 'lucide-react';
-import { getOrCreateUserId, resetUserId, initFlagsmithClient, trackFlagsmithConversion, FocusVariant } from '../lib/flagsmith';
+import { 
+  getOrCreateUserId, 
+  resetUserId, 
+  initFlagsmithClient, 
+  trackFlagsmithConversion, 
+  getFlagSource,
+  FocusVariant 
+} from '../lib/flagsmith';
 
 export default function FocusPulseApp() {
   const [userId, setUserId] = useState<string>('');
   const [variant, setVariant] = useState<FocusVariant | null>(null);
+  const [flagSource, setFlagSource] = useState<'flagsmith' | 'fallback'>('flagsmith');
   const [loading, setLoading] = useState<boolean>(true);
 
   // Timer State
@@ -28,173 +36,168 @@ export default function FocusPulseApp() {
   const [xpEarned, setXpEarned] = useState<number>(360);
   const [milestoneNudge, setMilestoneNudge] = useState<string | null>(null);
 
-  // Engineering Safeguards: Session UUID & Timer Ref
+  // Synchronous Refs for strict anti-spam, deduplication, and pagehide abandonment
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const sessionUuidRef = useRef<string>('');
+  const isActiveRef = useRef<boolean>(false);
+  const hasStartedRef = useRef<boolean>(false);
+  const hasCompletedRef = useRef<boolean>(false);
+  const hasAbandonedRef = useRef<boolean>(false);
+  const startedSessionsRef = useRef<Set<string>>(new Set());
   const completedSessionsRef = useRef<Set<string>>(new Set());
+  const userIdRef = useRef<string>('');
+  const variantRef = useRef<FocusVariant>('minimal');
+  const totalSecondsRef = useRef<number>(60);
+  const secondsLeftRef = useRef<number>(60);
+  const isDemoModeRef = useRef<boolean>(true);
 
-  // 1. Initialize persistent identity & Flagsmith variant with Zero-Flicker Loader
-  useEffect(() => {
-    async function setupExperiment() {
-      const id = getOrCreateUserId();
-      setUserId(id);
+  // Keep refs synchronized with latest state for pagehide/beforeunload handlers
+  useEffect(() => { userIdRef.current = userId; }, [userId]);
+  useEffect(() => { if (variant) variantRef.current = variant; }, [variant]);
+  useEffect(() => { totalSecondsRef.current = totalSeconds; }, [totalSeconds]);
+  useEffect(() => { secondsLeftRef.current = secondsLeft; }, [secondsLeft]);
+  useEffect(() => { isDemoModeRef.current = isDemoMode; }, [isDemoMode]);
 
-      const assignedVariant = await initFlagsmithClient(id);
-      setVariant(assignedVariant);
-      setLoading(false);
-
-      // Anti-Spam / Deduplication: Prevent duplicate exposure on React StrictMode or refresh
-      const exposureKey = `fp_exposed_${id}`;
-      if (!sessionStorage.getItem(exposureKey)) {
-        sessionStorage.setItem(exposureKey, 'true');
-        await fetch('/api/events', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            event_id: `exp_${id}_${Date.now()}`,
-            user_id: id,
-            variant: assignedVariant,
-            event_name: 'experiment_exposed',
-            metadata: { is_demo_mode: isDemoMode, timestamp: new Date().toISOString() }
-          })
-        });
-      }
-    }
-
-    setupExperiment();
-  }, []);
-
-  // Update duration when toggling Demo Mode
-  useEffect(() => {
-    const duration = isDemoMode ? 60 : 25 * 60;
-    setTotalSeconds(duration);
-    if (!hasStarted) {
-      setSecondsLeft(duration);
-    }
-  }, [isDemoMode, hasStarted]);
-
-  // Timer countdown loop
-  useEffect(() => {
-    if (isActive && secondsLeft > 0) {
-      timerRef.current = setInterval(() => {
-        setSecondsLeft((prev) => {
-          const next = prev - 1;
-
-          // Gamified milestone nudges (Variant B)
-          if (variant === 'gamified') {
-            const progress = ((totalSeconds - next) / totalSeconds) * 100;
-            if (progress >= 50 && progress < 55 && !milestoneNudge) {
-              setMilestoneNudge('🔥 Halfway mark reached! You are in the flow zone.');
-            } else if (progress >= 90 && progress < 95) {
-              setMilestoneNudge('⚡ Final stretch! Finish strong to claim +120 XP.');
-            }
-          }
-
-          if (next <= 0) {
-            handleSessionCompleted();
-            return 0;
-          }
-          return next;
-        });
-      }, 1000);
-    } else {
-      if (timerRef.current) clearInterval(timerRef.current);
-    }
-
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [isActive, secondsLeft, totalSeconds, variant, milestoneNudge]);
-
-  // Event 1: Session Started (Deduplicated with session_uuid)
-  const startTimer = async () => {
-    // Generate fresh session_uuid if starting from 0
-    if (!hasStarted) {
-      sessionUuidRef.current = `sess_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    }
-
-    setIsActive(true);
-    setHasStarted(true);
-    setIsCompleted(false);
-    setMilestoneNudge(null);
+  const sendExposureIfNeeded = useCallback(async (id: string, assignedVariant: FocusVariant, demoMode: boolean, source?: string) => {
+    const exposureKey = `fp_exposed_${id}`;
+    if (sessionStorage.getItem(exposureKey)) return;
+    sessionStorage.setItem(exposureKey, 'true');
 
     await fetch('/api/events', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        event_id: `start_${sessionUuidRef.current}`,
-        user_id: userId,
-        variant,
-        event_name: 'session_started',
-        metadata: { 
-          taskName, 
-          duration_seconds: totalSeconds,
-          is_demo_mode: isDemoMode,
-          session_uuid: sessionUuidRef.current
-        }
-      })
+        event_id: `exp_${id}`,
+        user_id: id,
+        variant: assignedVariant,
+        event_name: 'experiment_exposed',
+        metadata: {
+          is_demo_mode: demoMode,
+          flag_source: getFlagSource(),
+          source: source || 'initial_load',
+          timestamp: new Date().toISOString(),
+        },
+      }),
     });
-  };
+  }, []);
 
-  const pauseTimer = () => {
-    setIsActive(false);
-  };
+  // 1. Initialize persistent identity & Flagsmith variant with Zero-Flicker Loader
+  useEffect(() => {
+    let cancelled = false;
 
-  // Event 2: Session Abandoned (Includes elapsed_seconds for bot/noise filtering)
-  const resetTimer = async () => {
-    const elapsed = totalSeconds - secondsLeft;
+    async function setupExperiment() {
+      const id = getOrCreateUserId();
+      if (cancelled) return;
+      setUserId(id);
+      userIdRef.current = id;
 
-    if (isActive || (hasStarted && secondsLeft > 0 && !isCompleted)) {
-      await fetch('/api/events', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          event_id: `aban_${sessionUuidRef.current}_${Date.now()}`,
-          user_id: userId,
-          variant,
+      const assignedVariant = await initFlagsmithClient(id);
+      if (cancelled) return;
+
+      setVariant(assignedVariant);
+      variantRef.current = assignedVariant;
+      setFlagSource(getFlagSource());
+      setLoading(false);
+
+      await sendExposureIfNeeded(id, assignedVariant, isDemoModeRef.current, 'initial_load');
+    }
+
+    setupExperiment();
+    return () => {
+      cancelled = true;
+    };
+  }, [sendExposureIfNeeded]);
+
+  // Update duration when toggling Demo Mode (only when idle)
+  useEffect(() => {
+    const duration = isDemoMode ? 60 : 25 * 60;
+    setTotalSeconds(duration);
+    totalSecondsRef.current = duration;
+    if (!hasStarted) {
+      setSecondsLeft(duration);
+      secondsLeftRef.current = duration;
+    }
+  }, [isDemoMode, hasStarted]);
+
+  // 2. Track abandonment automatically if the user closes/navigates away mid-session
+  useEffect(() => {
+    const handleTabAbandon = () => {
+      const sid = sessionUuidRef.current;
+      if (
+        hasStartedRef.current &&
+        !hasCompletedRef.current &&
+        !hasAbandonedRef.current &&
+        sid
+      ) {
+        hasAbandonedRef.current = true;
+        const elapsed = Math.max(0, totalSecondsRef.current - secondsLeftRef.current);
+        const payload = JSON.stringify({
+          event_id: `aban_${sid}`,
+          user_id: userIdRef.current,
+          variant: variantRef.current,
           event_name: 'session_abandoned',
-          metadata: { 
+          metadata: {
             elapsed_seconds: elapsed,
             is_noise: elapsed < 10,
-            is_demo_mode: isDemoMode,
-            session_uuid: sessionUuidRef.current 
-          }
-        })
-      });
-    }
+            is_demo_mode: isDemoModeRef.current,
+            session_uuid: sid,
+            reason: 'tab_closed',
+          },
+        });
+        navigator.sendBeacon('/api/events', new Blob([payload], { type: 'application/json' }));
+      }
+    };
 
-    setIsActive(false);
-    setHasStarted(false);
-    setIsCompleted(false);
-    setMilestoneNudge(null);
-    setSecondsLeft(totalSeconds);
-    sessionUuidRef.current = '';
-  };
+    window.addEventListener('pagehide', handleTabAbandon);
+    window.addEventListener('beforeunload', handleTabAbandon);
+    return () => {
+      window.removeEventListener('pagehide', handleTabAbandon);
+      window.removeEventListener('beforeunload', handleTabAbandon);
+    };
+  }, []);
 
-  // Event 3: Session Completed (Guaranteed single execution per session_uuid)
-  const handleSessionCompleted = async () => {
-    const currentSessionId = sessionUuidRef.current || `sess_${Date.now()}`;
-    
-    // Anti-Spam: deduplicate completed event
-    if (completedSessionsRef.current.has(currentSessionId)) {
+  // 3. Pure countdown interval (no side-effect calls inside setState updater)
+  useEffect(() => {
+    if (!isActive) {
+      if (timerRef.current) clearInterval(timerRef.current);
       return;
     }
+
+    timerRef.current = setInterval(() => {
+      setSecondsLeft((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [isActive]);
+
+  // 4. Gamified milestone nudges and exact completion trigger
+  const handleSessionCompleted = useCallback(async () => {
+    const currentSessionId = sessionUuidRef.current;
+    if (!currentSessionId || completedSessionsRef.current.has(currentSessionId) || hasCompletedRef.current) {
+      return;
+    }
+
+    hasCompletedRef.current = true;
+    isActiveRef.current = false;
+    hasStartedRef.current = false;
     completedSessionsRef.current.add(currentSessionId);
 
     setIsActive(false);
     setIsCompleted(true);
     setHasStarted(false);
 
-    if (variant === 'gamified') {
+    if (variantRef.current === 'gamified') {
       setStreakCount((prev) => prev + 1);
       setXpEarned((prev) => prev + 120);
       try {
         confetti({
           particleCount: 120,
           spread: 70,
-          origin: { y: 0.6 }
+          origin: { y: 0.6 },
         });
-      } catch (e) {}
+      } catch {}
     }
 
     // 1. Log to local SQLite analytics database
@@ -203,45 +206,141 @@ export default function FocusPulseApp() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         event_id: `comp_${currentSessionId}`,
-        user_id: userId,
-        variant,
+        user_id: userIdRef.current,
+        variant: variantRef.current,
         event_name: 'session_completed',
-        metadata: { 
-          taskName, 
-          duration_seconds: totalSeconds,
-          is_demo_mode: isDemoMode,
-          session_uuid: currentSessionId
-        }
-      })
+        metadata: {
+          taskName,
+          duration_seconds: totalSecondsRef.current,
+          is_demo_mode: isDemoModeRef.current,
+          session_uuid: currentSessionId,
+        },
+      }),
     });
 
-    // 2. Dispatch conversion event to Flagsmith Experimentation
-    await trackFlagsmithConversion('completed_onboarding');
+    // 2. Dispatch conversion event to Flagsmith Experimentation (matches metric "session_completed")
+    await trackFlagsmithConversion('session_completed');
+  }, [taskName]);
+
+  useEffect(() => {
+    if (!isActive) return;
+
+    if (variant === 'gamified' && totalSeconds > 0 && secondsLeft > 0) {
+      const progress = ((totalSeconds - secondsLeft) / totalSeconds) * 100;
+      if (progress >= 90) {
+        setMilestoneNudge('⚡ Final stretch! Finish strong to claim +120 XP.');
+      } else if (progress >= 50) {
+        setMilestoneNudge('🔥 Halfway mark reached! You are in the flow zone.');
+      }
+    }
+
+    if (secondsLeft === 0) {
+      handleSessionCompleted();
+    }
+  }, [isActive, secondsLeft, totalSeconds, variant, handleSessionCompleted]);
+
+  // Event 1: Session Started (Synchronous double-click & Resume deduplication)
+  const startTimer = async () => {
+    if (isActiveRef.current) return; // Guard rapid double-clicks synchronously
+    isActiveRef.current = true;
+
+    const isFreshSession = !hasStartedRef.current;
+    if (isFreshSession) {
+      sessionUuidRef.current = `sess_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      hasStartedRef.current = true;
+      hasCompletedRef.current = false;
+      hasAbandonedRef.current = false;
+    }
+
+    const currentSid = sessionUuidRef.current;
+    setIsActive(true);
+    setHasStarted(true);
+    setIsCompleted(false);
+    if (isFreshSession) setMilestoneNudge(null);
+
+    if (isFreshSession && !startedSessionsRef.current.has(currentSid)) {
+      startedSessionsRef.current.add(currentSid);
+      await fetch('/api/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event_id: `start_${currentSid}`,
+          user_id: userIdRef.current,
+          variant: variantRef.current,
+          event_name: 'session_started',
+          metadata: {
+            taskName,
+            duration_seconds: totalSecondsRef.current,
+            is_demo_mode: isDemoModeRef.current,
+            session_uuid: currentSid,
+          },
+        }),
+      });
+    }
+  };
+
+  const pauseTimer = () => {
+    isActiveRef.current = false;
+    setIsActive(false);
+  };
+
+  // Event 2: Session Abandoned (Includes elapsed_seconds for bot/noise filtering)
+  const resetTimer = async () => {
+    const sid = sessionUuidRef.current;
+    const elapsed = Math.max(0, totalSecondsRef.current - secondsLeftRef.current);
+    const shouldLogAbandon =
+      (isActiveRef.current || (hasStartedRef.current && secondsLeftRef.current > 0 && !hasCompletedRef.current)) &&
+      !hasAbandonedRef.current &&
+      Boolean(sid);
+
+    isActiveRef.current = false;
+    hasStartedRef.current = false;
+    hasCompletedRef.current = false;
+
+    if (shouldLogAbandon) {
+      hasAbandonedRef.current = true;
+      await fetch('/api/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event_id: `aban_${sid}`,
+          user_id: userIdRef.current,
+          variant: variantRef.current,
+          event_name: 'session_abandoned',
+          metadata: {
+            elapsed_seconds: elapsed,
+            is_noise: elapsed < 10,
+            is_demo_mode: isDemoModeRef.current,
+            session_uuid: sid,
+            reason: 'user_reset',
+          },
+        }),
+      });
+    }
+
+    setIsActive(false);
+    setHasStarted(false);
+    setIsCompleted(false);
+    setMilestoneNudge(null);
+    setSecondsLeft(totalSecondsRef.current);
+    secondsLeftRef.current = totalSecondsRef.current;
+    sessionUuidRef.current = '';
   };
 
   const handleResetIdentity = async () => {
+    await resetTimer();
     const newId = resetUserId();
     setUserId(newId);
+    userIdRef.current = newId;
     setLoading(true);
+
     const newVariant = await initFlagsmithClient(newId);
     setVariant(newVariant);
+    variantRef.current = newVariant;
+    setFlagSource(getFlagSource());
     setLoading(false);
-    resetTimer();
 
-    // Log exposure for new identity
-    const exposureKey = `fp_exposed_${newId}`;
-    sessionStorage.setItem(exposureKey, 'true');
-    await fetch('/api/events', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        event_id: `exp_${newId}_${Date.now()}`,
-        user_id: newId,
-        variant: newVariant,
-        event_name: 'experiment_exposed',
-        metadata: { source: 'identity_reset', is_demo_mode: isDemoMode }
-      })
-    });
+    await sendExposureIfNeeded(newId, newVariant, isDemoModeRef.current, 'identity_reset');
   };
 
   const formatTime = (secs: number) => {
@@ -250,7 +349,7 @@ export default function FocusPulseApp() {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
-  const progressPct = ((totalSeconds - secondsLeft) / totalSeconds) * 100;
+  const progressPct = totalSeconds > 0 ? ((totalSeconds - secondsLeft) / totalSeconds) * 100 : 0;
 
   // =========================================================================
   // ZERO-FLICKER SKELETON LOADER
@@ -412,7 +511,6 @@ export default function FocusPulseApp() {
             {/* Circular Progress Ring with Countdown */}
             <div className="relative w-64 h-64 flex items-center justify-center mb-8">
               <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
-                {/* Background Ring */}
                 <circle
                   cx="50"
                   cy="50"
@@ -421,7 +519,6 @@ export default function FocusPulseApp() {
                   strokeWidth="6"
                   fill="transparent"
                 />
-                {/* Active Gradient Ring */}
                 <circle
                   cx="50"
                   cy="50"
@@ -517,7 +614,7 @@ export default function FocusPulseApp() {
 
       {/* FOOTER: PERSISTENT EXPERIMENT BADGE */}
       <footer className="max-w-4xl w-full mx-auto border-t border-slate-800/80 pt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500 font-mono">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <span>Session: <strong className="text-slate-300 font-semibold">{userId}</strong></span>
           <span className="text-slate-700">|</span>
           <span className="flex items-center gap-1.5">
@@ -529,6 +626,10 @@ export default function FocusPulseApp() {
             }`}>
               {variant?.toUpperCase()}
             </span>
+          </span>
+          <span className="text-slate-700">|</span>
+          <span className={`text-[11px] ${flagSource === 'flagsmith' ? 'text-emerald-400' : 'text-amber-400'}`}>
+            {flagSource === 'flagsmith' ? 'Flagsmith Live' : 'Fallback Default'}
           </span>
         </div>
 

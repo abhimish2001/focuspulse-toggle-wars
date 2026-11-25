@@ -57,15 +57,17 @@ flowchart TD
 
 ## 🚩 3. Flagsmith Setup & Flag Configuration
 
-1. **Multivariate Feature Flag:** `focus_experience_variant`
-   - **Variant A (Control):** `minimal` (Weight: 50%)
-   - **Variant B (Challenger):** `gamified` (Weight: 50%)
-2. **Persistent Anonymous Identity:**
+1. **Multivariate Feature Flag:** `focus_experience_variant` (Flag ID: `303219`)
+   - **Variant A (Control):** `minimal` (50% traffic allocation)
+   - **Variant B (Challenger):** `gamified` (50% traffic allocation, variant key: `gamified`)
+2. **Conversion Metric:** `session_completed` (Metric ID: `413`, aggregation: `occurrence`, direction: `up`)
+3. **Live Flagsmith Experiment:** [FocusPulse Timer Experience (#451)](https://app.flagsmith.com/project/55855/environment/esMZQYfcANsHcmozTaXb6F/experiments/451)
+4. **Persistent Anonymous Identity:**
    - On the first visit, FocusPulse generates a unique identifier (e.g., `user_8xf3k9p2`) persisted across sessions via `localStorage` and cookies.
    - Evaluated via `@flagsmith/flagsmith`:
      ```typescript
-     await flagsmith.identify(userId);
-     const variant = await flagsmith.getExperimentFlag('focus_experience_variant');
+     await flagsmith.init({ environmentID, enableEvents: true, identity: userId });
+     const flag = flagsmith.getExperimentFlag('focus_experience_variant');
      ```
    - This ensures the exact same user consistently experiences their assigned variant without layout shifts or bucket reassignment.
 
@@ -77,30 +79,32 @@ Every interaction is captured into an out-of-the-box local SQLite datastore (`no
 
 | Event Name | Trigger Condition | Role |
 | :--- | :--- | :--- |
-| `experiment_exposed` | Triggered when the flag evaluates on app load | Impression baseline |
-| `session_started` | User presses "Start Focus" | Funnel start |
-| `session_abandoned` | User presses "Reset" / leaves mid-session | Drop-off telemetry |
+| `experiment_exposed` | Triggered once per session when the flag resolves | Impression baseline |
+| `session_started` | User presses "Start Focus" (deduplicated per `session_uuid`) | Funnel start |
+| `session_abandoned` | User presses "Reset" or closes tab mid-session (`sendBeacon`) | Drop-off telemetry |
 | `session_completed` | Timer successfully reaches `00:00` | **Primary Conversion Metric** |
 
 ---
 
 ## 📈 5. Live Experiment Results
 
-Open `/results` in your browser to view the real-time comparison dashboard:
+> **Submission Note:** Replace the placeholder values below with your final real-traffic snapshot from `/results` and Flagsmith Dashboard before recording your demo video.
+
+Open `/results` in your browser to view the real-time comparison dashboard (supports CSV/JSON raw export and `<10s` noise filtering):
 
 ```
 +-------------------------------------------------------------------------+
-| FOCUSPULSE LIVE EXPERIMENT RESULTS                                      |
+| FOCUSPULSE LIVE EXPERIMENT RESULTS (SNAPSHOT TEMPLATE)                  |
 +-------------------------------------------------------------------------+
 | Metric                 | Variant A (Minimal)  | Variant B (Gamified)    |
 +------------------------+----------------------+-------------------------+
-| Unique Users Exposed   | 119                  | 131                     |
-| Sessions Started       | 104                  | 126                     |
-| Sessions Abandoned     | 57                   | 31                      |
-| Sessions Completed     | 47                   | 95                      |
+| Unique Users Exposed   | <paste count>        | <paste count>           |
+| Sessions Started       | <paste count>        | <paste count>           |
+| Sessions Abandoned     | <paste count>        | <paste count>           |
+| Sessions Completed     | <paste count>        | <paste count>           |
 +------------------------+----------------------+-------------------------+
-| Completion Rate (%)    | 45.2%                | 75.4%                   |
-| Statistical Lift       | Baseline             | +66.8% Lift 🏆          |
+| Completion Rate (%)    | <paste %>            | <paste %>               |
+| Statistical Lift       | Baseline             | <paste lift %>          |
 +-------------------------------------------------------------------------+
 ```
 

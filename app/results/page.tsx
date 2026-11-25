@@ -1,10 +1,9 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { 
-  BarChart3, ArrowLeft, RefreshCw, Users, Play, 
-  CheckCircle2, TrendingUp, AlertTriangle, Zap, Download, Filter 
+  ArrowLeft, RefreshCw, TrendingUp, Zap, Download, Filter, FlaskConical 
 } from 'lucide-react';
 
 interface VariantStats {
@@ -24,11 +23,21 @@ interface EventItem {
   metadata: string;
 }
 
+function parseMeta(raw: string | null): Record<string, any> {
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
 export default function ResultsPage() {
-  const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [simulating, setSimulating] = useState<boolean>(false);
   const [filterNoise, setFilterNoise] = useState<boolean>(true);
+  const [includeDemo, setIncludeDemo] = useState<boolean>(true);
+  const [excludedNoiseCount, setExcludedNoiseCount] = useState<number>(0);
   const [stats, setStats] = useState<{
     minimal: VariantStats;
     gamified: VariantStats;
@@ -39,29 +48,29 @@ export default function ResultsPage() {
   const [lift, setLift] = useState<number>(0);
   const [recentEvents, setRecentEvents] = useState<EventItem[]>([]);
 
-  const fetchStats = async () => {
+  const fetchStats = useCallback(async () => {
     try {
       setRefreshing(true);
-      const res = await fetch(`/api/stats?filterNoise=${filterNoise}`);
+      const res = await fetch(`/api/stats?filterNoise=${filterNoise}&includeDemo=${includeDemo}`);
       const data = await res.json();
       if (data.success) {
         setStats(data.summary);
         setLift(data.lift);
         setRecentEvents(data.recentEvents || []);
+        setExcludedNoiseCount(data.excludedNoiseCount || 0);
       }
     } catch (e) {
       console.error('Error fetching stats:', e);
     } finally {
       setRefreshing(false);
-      setLoading(false);
     }
-  };
+  }, [filterNoise, includeDemo]);
 
   useEffect(() => {
     fetchStats();
     const interval = setInterval(fetchStats, 5000);
     return () => clearInterval(interval);
-  }, [filterNoise]);
+  }, [fetchStats]);
 
   const handleSimulate = async () => {
     setSimulating(true);
@@ -133,10 +142,24 @@ export default function ResultsPage() {
                   ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
                   : 'bg-slate-900 text-slate-400 border-slate-800'
               }`}
-              title="Filters sessions abandoned in under 10 seconds to eliminate click noise and bots"
+              title="Excludes sessions abandoned in under 10 seconds to eliminate click noise and bots"
             >
               <Filter className="w-3.5 h-3.5" />
-              <span>{filterNoise ? 'Noise Filter (ON)' : 'Noise Filter (OFF)'}</span>
+              <span>{filterNoise ? `Noise Filter ON (${excludedNoiseCount})` : 'Noise Filter OFF'}</span>
+            </button>
+
+            {/* Demo Mode Filter Toggle */}
+            <button
+              onClick={() => setIncludeDemo(!includeDemo)}
+              className={`text-xs px-3 py-2 rounded-xl border transition flex items-center gap-1.5 font-medium ${
+                !includeDemo
+                  ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30'
+                  : 'bg-slate-900 text-slate-300 border-slate-700'
+              }`}
+              title="Toggle whether 60s Demo Mode test sessions are included in aggregates"
+            >
+              <FlaskConical className="w-3.5 h-3.5" />
+              <span>{includeDemo ? 'All Sessions' : 'Production Only (25m)'}</span>
             </button>
 
             {/* CSV Export Button */}
@@ -155,7 +178,7 @@ export default function ResultsPage() {
               download="focuspulse_events_export.json"
               className="bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 px-3 py-2 rounded-xl text-xs font-semibold transition flex items-center gap-1.5"
             >
-              <Download className="w-3.5 h-3.5 text-accent-400" />
+              <Download className="w-3.5 h-3.5 text-sky-400" />
               <span>JSON</span>
             </a>
 
@@ -334,48 +357,58 @@ export default function ResultsPage() {
                   <th className="py-2.5 px-3">Identity</th>
                   <th className="py-2.5 px-3">Variant</th>
                   <th className="py-2.5 px-3">Event Name</th>
+                  <th className="py-2.5 px-3">Details</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60">
                 {recentEvents.length === 0 ? (
                   <tr>
-                    <td colSpan={4} className="py-6 text-center text-slate-500">
-                      No interactions recorded yet. Start a focus session or click "Simulate 20 Users".
+                    <td colSpan={5} className="py-6 text-center text-slate-500">
+                      No interactions recorded yet. Start a focus session or click &quot;Simulate 20 Users&quot;.
                     </td>
                   </tr>
                 ) : (
-                  recentEvents.map((evt) => (
-                    <tr key={evt.event_id} className="hover:bg-slate-800/30 transition">
-                      <td className="py-2.5 px-3 text-slate-400">
-                        {new Date(evt.timestamp).toLocaleTimeString()}
-                      </td>
-                      <td className="py-2.5 px-3 text-slate-300 font-semibold">
-                        {evt.user_id.length > 18 ? evt.user_id.substring(0, 16) + '...' : evt.user_id}
-                      </td>
-                      <td className="py-2.5 px-3">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          evt.variant === 'gamified'
-                            ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
-                            : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/30'
-                        }`}>
-                          {evt.variant.toUpperCase()}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-3">
-                        <span className={`font-semibold ${
-                          evt.event_name === 'session_completed'
-                            ? 'text-emerald-400'
-                            : evt.event_name === 'session_started'
-                            ? 'text-accent-400'
-                            : evt.event_name === 'session_abandoned'
-                            ? 'text-rose-400'
-                            : 'text-slate-400'
-                        }`}>
-                          {evt.event_name}
-                        </span>
-                      </td>
-                    </tr>
-                  ))
+                  recentEvents.map((evt) => {
+                    const meta = parseMeta(evt.metadata);
+                    return (
+                      <tr key={evt.event_id} className="hover:bg-slate-800/30 transition">
+                        <td className="py-2.5 px-3 text-slate-400">
+                          {new Date(evt.timestamp).toLocaleTimeString()}
+                        </td>
+                        <td className="py-2.5 px-3 text-slate-300 font-semibold">
+                          {evt.user_id.length > 18 ? evt.user_id.substring(0, 16) + '...' : evt.user_id}
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            evt.variant === 'gamified'
+                              ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
+                              : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/30'
+                          }`}>
+                            {evt.variant.toUpperCase()}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <span className={`font-semibold ${
+                            evt.event_name === 'session_completed'
+                              ? 'text-emerald-400'
+                              : evt.event_name === 'session_started'
+                              ? 'text-sky-400'
+                              : evt.event_name === 'session_abandoned'
+                              ? 'text-rose-400'
+                              : 'text-slate-400'
+                          }`}>
+                            {evt.event_name}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 text-[11px] text-slate-500">
+                          {meta.is_demo_mode ? 'Demo 60s' : meta.duration_seconds ? `${meta.duration_seconds}s` : ''}
+                          {typeof meta.elapsed_seconds === 'number' ? ` ${meta.elapsed_seconds}s elapsed` : ''}
+                          {meta.is_noise ? ' (noise <10s)' : ''}
+                          {meta.reason ? ` (${meta.reason})` : ''}
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
