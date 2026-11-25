@@ -69,7 +69,7 @@
 - [ ] **Sticky Identity (Browser):** Open the live URL in a normal browser window, note the variant in the footer, and refresh 5 times to confirm it stays identical.
 - [ ] **50/50 Distribution (Incognito):** Open 6–8 separate Incognito/Private windows and verify roughly half see `minimal` and half see `gamified`.
 - [ ] **Fallback Resilience (Local Test):** In local testing, temporarily set an invalid value in `.env.local` (note: Next.js gives `.env.local` priority over `.env`), restart `npm run dev`, confirm it renders `minimal` (`Fallback Default` in footer) without crashing, then restore the valid key.
-- [ ] **End-to-End Session Completion:** Toggle **Demo Mode (60s)**, complete one full session in `minimal` and one in `gamified` (using **Reset Identity / Switch Variant** if needed), and verify both appear on `/results` with accurate timestamps and IDs.
+- [ ] **End-to-End Session Completion:** Open `/?admin=1`, toggle **Demo (1m)**, complete one full session in `minimal` and one in `gamified` (using **Reset Identity / Switch Variant** if needed), and verify both appear on `/results` with accurate timestamps and IDs.
 - [ ] **Abandonment Tracking (Reset & Tab Close):** Start a timer, wait 15+ seconds (`>= 10s` so the noise filter keeps it), click Reset (and repeat by closing a tab mid-session), then verify `session_abandoned` appears on `/results` and lowers the completion rate.
 - [ ] **Rapid Click Integrity:** Rapidly double-click Start (or Complete) and verify `/results` shows only one event per `session_uuid`.
 

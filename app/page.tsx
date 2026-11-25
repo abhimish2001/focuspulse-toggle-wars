@@ -22,11 +22,13 @@ export default function FocusPulseApp() {
   const [flagSource, setFlagSource] = useState<'flagsmith' | 'fallback'>('flagsmith');
   const [loading, setLoading] = useState<boolean>(true);
 
-  // Timer State
+  // Timer State & Admin Guard
+  const [showAdminControls, setShowAdminControls] = useState<boolean>(false);
   const [taskName, setTaskName] = useState<string>('Refactor Flagsmith Experimentation Engine');
-  const [isDemoMode, setIsDemoMode] = useState<boolean>(true); // 60s for demo, 25m for production
-  const [totalSeconds, setTotalSeconds] = useState<number>(60);
-  const [secondsLeft, setSecondsLeft] = useState<number>(60);
+  const [focusMinutes, setFocusMinutes] = useState<25 | 5>(25);
+  const [isDemoMode, setIsDemoMode] = useState<boolean>(false); // Default false so public sessions are genuine runs
+  const [totalSeconds, setTotalSeconds] = useState<number>(25 * 60);
+  const [secondsLeft, setSecondsLeft] = useState<number>(25 * 60);
   const [isActive, setIsActive] = useState<boolean>(false);
   const [hasStarted, setHasStarted] = useState<boolean>(false);
   const [isCompleted, setIsCompleted] = useState<boolean>(false);
@@ -47,9 +49,9 @@ export default function FocusPulseApp() {
   const completedSessionsRef = useRef<Set<string>>(new Set());
   const userIdRef = useRef<string>('');
   const variantRef = useRef<FocusVariant>('minimal');
-  const totalSecondsRef = useRef<number>(60);
-  const secondsLeftRef = useRef<number>(60);
-  const isDemoModeRef = useRef<boolean>(true);
+  const totalSecondsRef = useRef<number>(25 * 60);
+  const secondsLeftRef = useRef<number>(25 * 60);
+  const isDemoModeRef = useRef<boolean>(false);
 
   // Keep refs synchronized with latest state for pagehide/beforeunload handlers
   useEffect(() => { userIdRef.current = userId; }, [userId]);
@@ -85,6 +87,11 @@ export default function FocusPulseApp() {
   useEffect(() => {
     let cancelled = false;
 
+    const params = new URLSearchParams(window.location.search);
+    const isAdminQuery = params.get('admin') === '1';
+    const isEnvEnabled = process.env.NEXT_PUBLIC_ENABLE_DEMO_CONTROLS === 'true';
+    setShowAdminControls(isAdminQuery || isEnvEnabled);
+
     async function setupExperiment() {
       const id = getOrCreateUserId();
       if (cancelled) return;
@@ -108,16 +115,16 @@ export default function FocusPulseApp() {
     };
   }, [sendExposureIfNeeded]);
 
-  // Update duration when toggling Demo Mode (only when idle)
+  // Update duration when toggling focus preset or Demo Mode (only when idle)
   useEffect(() => {
-    const duration = isDemoMode ? 60 : 25 * 60;
+    const duration = isDemoMode ? 60 : focusMinutes * 60;
     setTotalSeconds(duration);
     totalSecondsRef.current = duration;
     if (!hasStarted) {
       setSecondsLeft(duration);
       secondsLeftRef.current = duration;
     }
-  }, [isDemoMode, hasStarted]);
+  }, [isDemoMode, focusMinutes, hasStarted]);
 
   // 2. Track abandonment automatically if the user closes/navigates away mid-session
   useEffect(() => {
@@ -387,23 +394,61 @@ export default function FocusPulseApp() {
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          {/* Quick Demo Mode Toggle */}
-          <button
-            onClick={() => { if (!hasStarted) setIsDemoMode(!isDemoMode); }}
-            disabled={hasStarted}
-            className={`text-xs px-2.5 py-1 rounded-lg border font-mono transition flex items-center gap-1.5 ${
-              isDemoMode 
-                ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' 
-                : 'bg-slate-900 text-slate-400 border-slate-800'
-            }`}
-          >
-            <Zap className="w-3 h-3" />
-            <span>{isDemoMode ? 'Demo Mode (60s)' : 'Standard (25m)'}</span>
-          </button>
+        <div className="flex items-center gap-2 sm:gap-3">
+          {/* Genuine Public Focus Duration Presets (is_demo_mode: false) */}
+          <div className="flex items-center bg-slate-900 border border-slate-800 rounded-lg p-0.5 text-xs font-mono">
+            <button
+              onClick={() => {
+                if (!hasStarted) {
+                  setIsDemoMode(false);
+                  setFocusMinutes(25);
+                }
+              }}
+              disabled={hasStarted}
+              className={`px-2 py-1 rounded-md transition ${
+                !isDemoMode && focusMinutes === 25
+                  ? 'bg-slate-800 text-white font-semibold'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              25m
+            </button>
+            <button
+              onClick={() => {
+                if (!hasStarted) {
+                  setIsDemoMode(false);
+                  setFocusMinutes(5);
+                }
+              }}
+              disabled={hasStarted}
+              className={`px-2 py-1 rounded-md transition ${
+                !isDemoMode && focusMinutes === 5
+                  ? 'bg-slate-800 text-white font-semibold'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              5m
+            </button>
+          </div>
+
+          {/* Admin-only Demo (1m) Toggle */}
+          {showAdminControls && (
+            <button
+              onClick={() => { if (!hasStarted) setIsDemoMode(!isDemoMode); }}
+              disabled={hasStarted}
+              className={`text-xs px-2.5 py-1 rounded-lg border font-mono transition flex items-center gap-1.5 ${
+                isDemoMode 
+                  ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' 
+                  : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+              }`}
+            >
+              <Zap className="w-3 h-3" />
+              <span>Demo (1m)</span>
+            </button>
+          )}
 
           <Link
-            href="/results"
+            href={showAdminControls ? '/results?admin=1' : '/results'}
             className="text-xs bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 px-3 py-1.5 rounded-lg font-medium transition flex items-center gap-1.5"
           >
             <BarChart3 className="w-3.5 h-3.5 text-brand-400" />
@@ -633,15 +678,17 @@ export default function FocusPulseApp() {
           </span>
         </div>
 
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleResetIdentity}
-            className="text-slate-400 hover:text-white underline hover:no-underline flex items-center gap-1 text-[11px]"
-          >
-            <RefreshCw className="w-3 h-3" />
-            <span>Reset Identity / Switch Variant</span>
-          </button>
-        </div>
+        {showAdminControls && (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleResetIdentity}
+              className="text-slate-400 hover:text-white underline hover:no-underline flex items-center gap-1 text-[11px]"
+            >
+              <RefreshCw className="w-3 h-3" />
+              <span>Reset Identity / Switch Variant</span>
+            </button>
+          </div>
+        )}
       </footer>
     </div>
   );

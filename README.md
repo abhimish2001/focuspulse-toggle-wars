@@ -130,8 +130,8 @@ Visit:
 - **Live Results Dashboard:** `http://localhost:3000/results`
 
 ### Testing the Experiment
-1. Toggle **Demo Mode (60s)** in the top right to test complete sessions rapidly.
-2. Click **Reset Identity / Switch Variant** in the footer to test how new users are deterministically assigned between `minimal` and `gamified`.
+1. Regular visitors at `/` see genuine `25m` / `5m` focus presets (`is_demo_mode: false`) with a read-only session badge.
+2. For demo recording and testing, open `/?admin=1` to unlock the **Demo (1m)** toggle and **Reset Identity / Switch Variant** button in the footer.
 3. To access protected simulation/reset controls on `/results`, visit `/results?admin=1` and enter your `ADMIN_SECRET`.
 
 ---

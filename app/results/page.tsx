@@ -217,7 +217,7 @@ export default function ResultsPage() {
               </span>
             </h1>
             <p className="text-xs sm:text-sm text-slate-400 max-w-2xl">
-              Track 01 Head-to-Head: Minimalist Monochrome vs. Gamified Streak & Instant Reward UI.
+              Hypothesis: Does a Gamified Streak &amp; Instant Reward UI (<code className="text-amber-400">gamified</code>) increase focus session completion rates compared to a Minimalist Monochrome Timer (<code className="text-indigo-400">minimal</code>)?
             </p>
           </div>
 
