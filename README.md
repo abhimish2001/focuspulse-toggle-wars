@@ -3,8 +3,8 @@
 > **Live A/B Experimentation Engine powered by Flagsmith Multivariate Flags & Real-Time SQLite Telemetry.**
 
 * **Track:** Track 01 — *Test Something Real* (WeMakeDevs × Flagsmith Toggle Wars)
-* **Live App:** `[PASTE_YOUR_LIVE_DEPLOYED_URL]`
-* **Live Experiment Results:** `[PASTE_YOUR_LIVE_DEPLOYED_URL]/results`
+* **Live App:** https://focuspulse-toggle-wars.onrender.com
+* **Live Experiment Results:** https://focuspulse-toggle-wars.onrender.com/results
 * **Demo Video (3 Mins):** `[PASTE_YOUR_YOUTUBE_OR_LOOM_LINK]`
 
 ---
