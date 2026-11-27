@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "verify:prod": "node scripts/verify-production.js"
   },
   "keywords": [],
   "type": "commonjs",
